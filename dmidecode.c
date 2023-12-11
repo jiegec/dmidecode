@@ -4332,6 +4332,54 @@ static void dmi_tpm_characteristics(u64 code)
 }
 
 /*
+ * 7.45 Processor Additional Information (Type 44)
+ */
+
+static void dmi_processor_additional_loongarch(const u8 *p)
+{
+	/* https://loongson.github.io/loongarch-smbios/LoongArch-Processor-SMBIOS-Spec-EN.html */
+	/* 3.3 LoongArch Processor-specific Block Structure */
+	u16 revision;
+	u8 block_length;
+	u8 machine_vendor_id[0x11];
+	u8 cpu_id[0x11];
+	u64 isa_extensions_support;
+	/* https://loongson.github.io/LoongArch-Documentation/LoongArch-Vol1-EN.html */
+	/* Table 17. Definition of extended component unit enable register */
+	static const char *isa_extensions[] = {
+		"Floating Point Instructions", /* 0 */
+		"128-bit Vector Instructions", /* 1 */
+		"256-bit Vector Instructions", /* 2 */
+		"Binary Translation Instructions" /* 3 */
+	};
+	int i;
+
+	revision = WORD(p);
+	if (revision != 0x0100) return;
+
+	block_length = p[2];
+	if (block_length != 0x28) return;
+
+	memcpy(machine_vendor_id, p + 0x04, 16);
+	machine_vendor_id[0x10] = 0;
+	pr_attr("Machine Vendor ID", "%s",
+		machine_vendor_id);
+
+	memcpy(cpu_id, p + 0x14, 16);
+	cpu_id[0x10] = 0;
+	pr_attr("CPU ID", "%s",
+		cpu_id);
+
+	/* 7.4.3. Extended Component Unit Enable (EUEN) */
+	isa_extensions_support = QWORD(p + 0x24);
+	pr_list_start("ISA Extensions Support", NULL);
+	for (i = 0; i < 4; i++)
+		if (isa_extensions_support.l & (1 << i))
+			pr_list_item("%s", isa_extensions[i]);
+	pr_list_end();
+}
+
+/*
  * 7.46 Firmware Inventory Information (Type 45)
  */
 
@@ -4385,6 +4433,20 @@ static void dmi_firmware_components(u8 count, const u8 *p)
 static void dmi_decode(const struct dmi_header *h, u16 ver)
 {
 	const u8 *data = h->data;
+	/* Table 130 – Processor Architecture Types */
+	static const char *processor_types[] = {
+		"Reserved", /* 0x00 */
+		"IA32 (x86)", /* 0x01 */
+		"x64 (x86-64, Intel64, AMD64, EM64T)", /* 0x02 */
+		"Intel Itanium architecture", /* 0x03 */
+		"32-bit ARM (Aarch32)", /* 0x04 */
+		"64-bit ARM (Aarch64)", /* 0x05 */
+		"32-bit RISC-V (RV32)", /* 0x06 */
+		"64-bit RISC-V (RV64)", /* 0x07 */
+		"128-bit RISC-V (RV128)", /* 0x08 */
+		"32-bit LoongArch (LoongArch32)", /* 0x09 */
+		"64-bit LoongArch (LoongArch64)", /* 0x0A */
+	};
 
 	/*
 	 * Note: DMI types 37 and 42 are untested
@@ -5433,6 +5495,33 @@ static void dmi_decode(const struct dmi_header *h, u16 ver)
 			if (h->length < 0x1F) break;
 			pr_attr("OEM-specific Information", "0x%08X",
 				DWORD(data + 0x1B));
+			break;
+
+		case 44: /* 7.45 Processor Additional Information (Type 44) */
+			pr_handle_name("Processor Additional Information");
+			if (h->length < 0x06) break;
+			pr_attr("Referenced Handle", "0x%04X",
+				WORD(data + 0x04));
+			if (h->length >= 0x08) { /* Processor-specific block (see Table 129) */
+				if (h->length < 0x08 + data[0x06]) break;
+
+				/* Processor Type */
+				if (data[0x07] > 0x0A) break;
+				pr_attr("Processor Type", "%s",
+					processor_types[data[0x07]]);
+
+				/* Processor Type */
+				switch (data[0x07])
+				{
+					case 0x09: /* 32-bit LoongArch (LoongArch32) */
+					case 0x0A: /* 64-bit LoongArch (LoongArch64) */
+						/* 7.45.2.2 LoongArch Processor Processor-specific Data */
+						/* Minimum Block Length */
+						if (data[0x06] >= 0x28)
+							dmi_processor_additional_loongarch(data + 0x8);
+						break;
+				}
+			}
 			break;
 
 		case 45: /* 7.46 Firmware Inventory Information */
